@@ -1,0 +1,103 @@
+/* PulseSport login — uses the variables defined in styles.css */
+.account-wrap { position: relative; display: flex; align-items: center; gap: 10px; }
+
+.auth-email {
+  display: none;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.auth-email.show { display: block; }
+@media (max-width: 900px) { .auth-email { display: none !important; } }
+
+#account-btn.logged-in { border-color: var(--accent); color: var(--accent); }
+
+.auth-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  min-width: 240px;
+  padding: 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+  z-index: 200;
+}
+.auth-menu.show { display: block; }
+.auth-menu-label { font-size: 12px; color: var(--text-muted); margin-bottom: 2px; }
+.auth-menu-email {
+  font-size: 14px;
+  font-weight: 600;
+  word-break: break-all;
+  margin-bottom: 12px;
+}
+
+.auth-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+}
+.auth-overlay.show { display: flex; }
+
+.auth-card {
+  position: relative;
+  width: 100%;
+  max-width: 400px;
+  padding: 32px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+}
+.auth-card h2 { font-size: 24px; margin-bottom: 6px; }
+.auth-sub { color: var(--text-secondary); font-size: 14px; margin-bottom: 24px; }
+
+.auth-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.auth-close:hover { color: var(--text-primary); border-color: var(--border-hover); }
+
+.auth-field { margin-bottom: 16px; }
+.auth-field label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; }
+.auth-field input {
+  width: 100%;
+  padding: 11px 14px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 14px;
+}
+.auth-field input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.auth-field.invalid input { border-color: var(--danger); }
+.auth-error { min-height: 16px; margin-top: 5px; font-size: 12px; color: var(--danger); }
+
+.auth-submit { width: 100%; justify-content: center; margin-top: 4px; }
+.auth-note { margin-top: 18px; font-size: 12px; color: var(--text-muted); line-height: 1.5; }
