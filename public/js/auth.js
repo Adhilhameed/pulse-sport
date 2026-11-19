@@ -3,10 +3,13 @@
  * - Login is REQUIRED before the shop is usable (set REQUIRE_LOGIN = false to make it optional).
  * - Any valid email + password of 6+ characters logs in.
  * - The session lives in localStorage so it survives refresh.
- * - After login (and on every page load while logged in) the email is passed
- *   to TruePrivacy through Auth.identify().
+ * - After login (and on every page load while logged in) the email is sent to
+ *   TruePrivacy with identify(); on logout, reset() is called.
  * - Its own styles are injected from this file, so nothing else needs deploying.
  */
+// TruePrivacy command queue: safe to push to before banner.js has finished loading.
+window.TruePrivacyQueue = window.TruePrivacyQueue || [];
+
 const AUTH_CSS = `.account-wrap { position: relative; display: flex; align-items: center; gap: 10px; }
 
 .auth-email {
@@ -136,100 +139,23 @@ const Auth = {
     try { return JSON.parse(localStorage.getItem(this.KEY)); } catch (e) { return null; }
   },
 
-  // ─── TRUEPRIVACY LINKING ──────────────────────────────────────
-  // The banner (banner.js) keeps an anonymous "subject" per visitor and lets you
-  // attach an identifier to it (type "email"). Consent Management then shows that
-  // identifier for the subject. We do this in two ways:
-  //   1) Preferred: call the banner's own identify(email, 'email') if its global is found.
-  //   2) Fallback: call the same public endpoint the banner uses, once the visitor
-  //      has a subject id (i.e. after they make a cookie choice).
-  TP_GLOBALS: ['TruePrivacy', 'trueprivacy', 'truePrivacy', 'TruePrivacyConsent', 'TP', 'tp'],
-  TP_MARKER: 'pulsesport_tp_linked',
-  _linkTimer: null,
-
-  tpSdk() {
-    for (const name of this.TP_GLOBALS) {
-      const g = window[name];
-      if (g && typeof g.identify === 'function') return g;
-    }
-    return null;
-  },
-
-  tpScript() {
-    return document.querySelector('script[data-key^="tp_ck_"]');
-  },
-
-  tpSubjectId() {
-    const m = document.cookie.match(/(?:^|; )_tp_consent=([^;]*)/);
-    if (m) return decodeURIComponent(m[1]);
-    try { return localStorage.getItem('_tp_consent_sid'); } catch (e) { return null; }
-  },
-
+  // ─── TRUEPRIVACY ──────────────────────────────────────────────
+  // Official queue API. identify() is safe to call on every page; TruePrivacy
+  // sends it only once per user. We pass the email with type "email" so the
+  // Consent Management subject shows the email address.
   identify(email) {
-    const sdk = this.tpSdk();
-    if (sdk) {
-      console.log('[PulseSport] Linking email via TruePrivacy SDK:', email);
-      try { sdk.identify(email, 'email'); } catch (err) { console.warn('[PulseSport] SDK identify failed:', err); }
-      return;
-    }
-    console.warn('[PulseSport] TruePrivacy SDK global not found; using direct API link instead.');
-    this.linkViaApi(email);
-  },
-
-  linkViaApi(email) {
-    clearInterval(this._linkTimer);
-    const script = this.tpScript();
-    if (!script) { console.warn('[PulseSport] TruePrivacy banner <script data-key=...> not found.'); return; }
-
-    const key = script.getAttribute('data-key');
-    const base = (script.getAttribute('data-api') || 'https://consent.truecookieconsent.com').replace(/\/$/, '');
-    let tries = 0;
-
-    const attempt = async () => {
-      const subjectId = this.tpSubjectId();
-      if (!subjectId) {
-        // No subject yet: it is created when the visitor makes a cookie choice. Keep waiting (up to ~10 min).
-        if (++tries > 600) clearInterval(this._linkTimer);
-        return;
-      }
-      clearInterval(this._linkTimer);
-
-      const marker = subjectId + '|' + email;
-      try { if (localStorage.getItem(this.TP_MARKER) === marker) return; } catch (e) {}
-
-      try {
-        const res = await fetch(`${base}/v1/public/consent/${key}/identify`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'omit',
-          body: JSON.stringify({ subjectId, identifier: email, identifierType: 'email' })
-        });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        try { localStorage.setItem(this.TP_MARKER, marker); } catch (e) {}
-        console.log('[PulseSport] Linked', email, 'to TruePrivacy subject', subjectId);
-      } catch (err) {
-        console.warn('[PulseSport] Could not link email to TruePrivacy:', err);
-      }
-    };
-
-    this._linkTimer = setInterval(attempt, 1000);
-    attempt();
-  },
-
-  // On logout, drop the link so the next visitor/user gets a fresh anonymous subject.
-  clearIdentity() {
-    clearInterval(this._linkTimer);
-    const sdk = this.tpSdk();
-    if (sdk && typeof sdk.reset === 'function') {
-      try { sdk.reset(); console.log('[PulseSport] TruePrivacy identity reset'); return; } catch (err) {}
-    }
-    // Manual equivalent of the SDK's reset()
-    document.cookie = '_tp_consent=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Lax';
-    ['_tp_consent_sid', '_tp_uid_linked', '_tp_identified_email', '_tp_identified_hashed_email',
-     '_tp_identified_external_id', '_tp_consent_receipt', this.TP_MARKER].forEach((k) => {
-      try { localStorage.removeItem(k); } catch (e) {}
+    window.TruePrivacyQueue.push((trueprivacy) => {
+      console.log('[PulseSport] TruePrivacy identify:', email);
+      trueprivacy.identify(email, 'email');
     });
-    window.location.reload();
+  },
+
+  // On sign-out: reset so the next visitor/user gets a fresh anonymous subject.
+  clearIdentity() {
+    window.TruePrivacyQueue.push((trueprivacy) => {
+      console.log('[PulseSport] TruePrivacy reset');
+      trueprivacy.reset();
+    });
   },
 
   // ─── UI ───────────────────────────────────────────────────────
