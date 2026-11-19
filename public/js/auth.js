@@ -127,8 +127,8 @@ const Auth = {
     this.bind();
 
     if (this.user) {
-      if (document.readyState === 'complete') this.identify(this.user.email);
-      else window.addEventListener('load', () => this.identify(this.user.email));
+      if (document.readyState === 'complete') this.identify(this.user);
+      else window.addEventListener('load', () => this.identify(this.user));
     } else if (this.REQUIRE_LOGIN) {
       this.openModal();
     }
@@ -136,17 +136,31 @@ const Auth = {
 
   // ─── STORAGE ──────────────────────────────────────────────────
   read() {
-    try { return JSON.parse(localStorage.getItem(this.KEY)); } catch (e) { return null; }
+    try {
+      const u = JSON.parse(localStorage.getItem(this.KEY));
+      if (u && u.email && !u.id) u.id = this.makeId(u.email);
+      return u;
+    } catch (e) { return null; }
+  },
+
+  // Stable internal user id derived from the email (same email -> same id).
+  // It must NOT look like an email, otherwise TruePrivacy treats it as an email.
+  makeId(email) {
+    let h = 2166136261;
+    const str = email.trim().toLowerCase();
+    for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return 'usr_' + (h >>> 0).toString(36);
   },
 
   // ─── TRUEPRIVACY ──────────────────────────────────────────────
   // Official queue API. identify() is safe to call on every page; TruePrivacy
-  // sends it only once per user. We pass the email with type "email" so the
-  // Consent Management subject shows the email address.
-  identify(email) {
+  // sends it only once per user. We send a stable user id (-> "User ID" field)
+  // and the email (-> email identifier).
+  identify(user) {
     window.TruePrivacyQueue.push((trueprivacy) => {
-      console.log('[PulseSport] TruePrivacy identify:', email);
-      trueprivacy.identify(email, 'email');
+      console.log('[PulseSport] TruePrivacy identify:', user.id, user.email);
+      trueprivacy.identify(user.id);              // shows in the "User ID" field
+      trueprivacy.identify(user.email, 'email');  // stored as the email identifier
     });
   },
 
@@ -217,12 +231,12 @@ const Auth = {
 
     if (!ok) return;
 
-    this.user = { email, loggedInAt: new Date().toISOString() };
+    this.user = { email, id: this.makeId(email), loggedInAt: new Date().toISOString() };
     try { localStorage.setItem(this.KEY, JSON.stringify(this.user)); } catch (err) {}
 
     this.closeModal();
     this.renderHeader();
-    this.identify(email);
+    this.identify(this.user);
     App.showToast('Logged in as ' + email);
   },
 
