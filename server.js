@@ -5,6 +5,14 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ─── TruePrivacy webhook (must come BEFORE express.json()) ────────────
+app.post('/webhooks/trueprivacy', express.raw({ type: '*/*' }), (req, res) => {
+  console.log('--- TRUEPRIVACY WEBHOOK ---');
+  console.log('HEADERS:', JSON.stringify(req.headers, null, 2));
+  console.log('BODY:', req.body.toString());
+  res.sendStatus(200);
+});
+
 console.log('Serving from:', path.join(__dirname, 'public'));
 app.use(express.json());
 app.use(cookieParser());
