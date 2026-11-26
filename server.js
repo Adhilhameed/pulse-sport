@@ -1,16 +1,119 @@
 const express = require('express');
 const cookieParser = require('cookie-parser');
+const crypto = require('crypto');
 const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ─── TruePrivacy config (set these as environment variables on Render) ─
+// TP_API_KEY         : API key from TruePrivacy > Settings > API keys
+// TP_WEBHOOK_SECRET  : signing secret shown when the webhook was created
+// TP_API_BASE        : TruePrivacy API base URL (check your API docs / API keys page)
+// TP_ENFORCE_SIG     : set to "true" to reject webhooks with a bad signature
+const TP_API_KEY = process.env.TP_API_KEY || '';
+const TP_WEBHOOK_SECRET = process.env.TP_WEBHOOK_SECRET || '';
+const TP_API_BASE = (process.env.TP_API_BASE || 'https://api.trueprivacy.io').replace(/\/$/, '');
+const TP_ENFORCE_SIG = process.env.TP_ENFORCE_SIG === 'true';
+
+// Verify the webhook signature. Header format (from your logs):
+//   x-trueprivacy-signature-v2: t=<timestamp>,v1=<hex>
+// Assumed scheme: HMAC-SHA256(secret, `${t}.${rawBody}`). Falls back to the
+// legacy header: HMAC-SHA256(secret, rawBody). The result is logged so you can
+// confirm which one matches before turning on TP_ENFORCE_SIG.
+function verifyTruePrivacySignature(rawBody, headers) {
+  if (!TP_WEBHOOK_SECRET) return { ok: false, reason: 'TP_WEBHOOK_SECRET not set' };
+
+  const safeEqual = (a, b) => {
+    const ba = Buffer.from(a || '', 'utf8');
+    const bb = Buffer.from(b || '', 'utf8');
+    return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
+  };
+
+  const v2 = headers['x-trueprivacy-signature-v2'];
+  if (v2) {
+    const parts = Object.fromEntries(v2.split(',').map(p => p.trim().split('=')));
+    if (parts.t && parts.v1) {
+      const expected = crypto.createHmac('sha256', TP_WEBHOOK_SECRET)
+        .update(`${parts.t}.${rawBody}`).digest('hex');
+      if (safeEqual(expected, parts.v1)) return { ok: true, reason: 'v2 matched' };
+    }
+  }
+
+  const legacy = headers['x-trueprivacy-signature'];
+  if (legacy) {
+    const expected = crypto.createHmac('sha256', TP_WEBHOOK_SECRET)
+      .update(rawBody).digest('hex');
+    if (safeEqual(expected, legacy)) return { ok: true, reason: 'legacy matched' };
+  }
+
+  return { ok: false, reason: 'no signature matched (scheme may differ from assumption)' };
+}
+
+// Your own check that this guardian email belongs to a known adult user.
+// Test site: every guardian email is treated as an adult. Replace with a real
+// lookup (e.g. your users table) in production.
+async function isKnownAdult(email) {
+  return true;
+}
+
+// Tell TruePrivacy that this guardian is a known adult.
+// NOTE: the request body and auth header below are best guesses. If the call
+// fails, the logged response will say what it expects.
+async function markGuardianAdult(parentalConsentId, email) {
+  const url = `${TP_API_BASE}/v1/parental-consents/${parentalConsentId}/adult-account`;
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${TP_API_KEY}`,
+        'x-api-key': TP_API_KEY
+      },
+      body: JSON.stringify({ email })
+    });
+    const text = await resp.text();
+    console.log(`[TruePrivacy] adult-account -> ${resp.status} ${text}`);
+  } catch (err) {
+    console.error('[TruePrivacy] adult-account call failed:', err);
+  }
+}
+
 // ─── TruePrivacy webhook (must come BEFORE express.json()) ────────────
-app.post('/webhooks/trueprivacy', express.raw({ type: '*/*' }), (req, res) => {
+app.post('/webhooks/trueprivacy', express.raw({ type: '*/*' }), async (req, res) => {
+  const rawBody = req.body.toString('utf8');
+
+  const sig = verifyTruePrivacySignature(rawBody, req.headers);
   console.log('--- TRUEPRIVACY WEBHOOK ---');
-  console.log('HEADERS:', JSON.stringify(req.headers, null, 2));
-  console.log('BODY:', req.body.toString());
+  console.log('Event:', req.headers['x-trueprivacy-event'], '| Signature:', sig.ok, '-', sig.reason);
+  console.log('BODY:', rawBody);
+
+  if (TP_ENFORCE_SIG && !sig.ok) return res.sendStatus(401);
+
+  let event;
+  try {
+    event = JSON.parse(rawBody);
+  } catch (e) {
+    return res.sendStatus(400);
+  }
+
+  // Acknowledge quickly so TruePrivacy does not retry
   res.sendStatus(200);
+
+  if (event.event !== 'parental_consent.requested') return;
+
+  const parentalConsentId = event.data && event.data.parentalConsentId;
+  const guardianEmail = event.data && event.data.guardianEmail;
+  if (!parentalConsentId || !guardianEmail) {
+    console.log('[TruePrivacy] Missing parentalConsentId or guardianEmail, skipping');
+    return;
+  }
+
+  if (await isKnownAdult(guardianEmail)) {
+    await markGuardianAdult(parentalConsentId, guardianEmail);
+  } else {
+    console.log('[TruePrivacy] Guardian is not a known adult, not confirming:', guardianEmail);
+  }
 });
 
 console.log('Serving from:', path.join(__dirname, 'public'));
