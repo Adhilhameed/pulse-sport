@@ -2,7 +2,8 @@
  * PulseSport demo login (front-end only, self-contained).
  * - Login is REQUIRED before the shop is usable (set REQUIRE_LOGIN = false to make it optional).
  * - Any valid email + password of 6+ characters logs in.
- * - The session lives in localStorage so it survives refresh.
+ * - The session lives in a signed httpOnly cookie set by the server (/api/login, /api/me).
+ *   The server also issues the TruePrivacy identity token for the signed-in email.
  * - After login (and on every page load while logged in) the email is sent to
  *   TruePrivacy with identify(); on logout, reset() is called.
  * - Its own styles are injected from this file, so nothing else needs deploying.
@@ -113,7 +114,6 @@ const AUTH_CSS = `.account-wrap { position: relative; display: flex; align-items
 `;
 
 const Auth = {
-  KEY: 'pulsesport_user',
   REQUIRE_LOGIN: true,
   user: null,
 
@@ -122,34 +122,24 @@ const Auth = {
     style.textContent = AUTH_CSS;
     document.head.appendChild(style);
 
-    this.user = this.read();
-    this.renderHeader();
     this.bind();
-
-    if (this.user) {
-      if (document.readyState === 'complete') this.identify(this.user);
-      else window.addEventListener('load', () => this.identify(this.user));
-    } else if (this.REQUIRE_LOGIN) {
-      this.openModal();
-    }
+    this.loadSession().then(() => {
+      this.renderHeader();
+      if (this.user) {
+        if (document.readyState === 'complete') this.identify(this.user);
+        else window.addEventListener('load', () => this.identify(this.user));
+      } else if (this.REQUIRE_LOGIN) {
+        this.openModal();
+      }
+    });
   },
 
-  // ─── STORAGE ──────────────────────────────────────────────────
-  read() {
+  // Ask the server who is signed in (and get a fresh identity token).
+  async loadSession() {
     try {
-      const u = JSON.parse(localStorage.getItem(this.KEY));
-      if (u && u.email && !u.id) u.id = this.makeId(u.email);
-      return u;
-    } catch (e) { return null; }
-  },
-
-  // Stable internal user id derived from the email (same email -> same id).
-  // It must NOT look like an email, otherwise TruePrivacy treats it as an email.
-  makeId(email) {
-    let h = 2166136261;
-    const str = email.trim().toLowerCase();
-    for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
-    return 'usr_' + (h >>> 0).toString(36);
+      const r = await fetch('/api/me', { credentials: 'same-origin', cache: 'no-store' });
+      this.user = r.ok ? await r.json() : null;
+    } catch (e) { this.user = null; }
   },
 
   // ─── TRUEPRIVACY ──────────────────────────────────────────────
@@ -160,7 +150,10 @@ const Auth = {
     window.TruePrivacyQueue.push((trueprivacy) => {
       console.log('[PulseSport] TruePrivacy identify:', user.id, user.email);
       trueprivacy.identify(user.id);              // shows in the "User ID" field
-      trueprivacy.identify(user.email, 'email');  // stored as the email identifier
+      // Email link needs the server-issued identity token (HMAC of this exact email).
+      const opts = user.identityToken ? { identityToken: user.identityToken } : undefined;
+      if (opts) trueprivacy.identify(user.email, 'email', opts);
+      else trueprivacy.identify(user.email, 'email');
     });
   },
 
@@ -231,18 +224,27 @@ const Auth = {
 
     if (!ok) return;
 
-    this.user = { email, id: this.makeId(email), loggedInAt: new Date().toISOString() };
-    try { localStorage.setItem(this.KEY, JSON.stringify(this.user)); } catch (err) {}
-
-    this.closeModal();
-    this.renderHeader();
-    this.identify(this.user);
-    App.showToast('Logged in as ' + email);
+    fetch('/api/login', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    })
+      .then(async (r) => {
+        const data = await r.json();
+        if (!r.ok) { this.setError(data.field || 'email', data.error || 'Login failed'); return; }
+        this.user = data;                      // { email, id, identityToken, ... }
+        this.closeModal();
+        this.renderHeader();
+        this.identify(this.user);
+        App.showToast('Logged in as ' + email);
+      })
+      .catch(() => this.setError('email', 'Could not reach the server. Try again.'));
   },
 
   logout() {
     this.user = null;
-    try { localStorage.removeItem(this.KEY); } catch (err) {}
+    fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
     document.getElementById('auth-menu').style.display = 'none';
     this.renderHeader();
     this.clearIdentity();

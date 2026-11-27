@@ -16,6 +16,29 @@ const TP_WEBHOOK_SECRET = process.env.TP_WEBHOOK_SECRET || '';
 const TP_API_BASE = (process.env.TP_API_BASE || 'https://api.trueprivacy.io').replace(/\/$/, '');
 const TP_ENFORCE_SIG = process.env.TP_ENFORCE_SIG === 'true';
 
+// Identity verification secret (TruePrivacy > Identity verification > Reveal secret).
+// Server-side only. Never expose it to the page.
+const TP_IDENTITY_SECRET = process.env.TRUEPRIVACY_IDENTITY_SECRET || '';
+const COOKIE_SECRET = process.env.COOKIE_SECRET || 'change-me-in-production';
+if (!TP_IDENTITY_SECRET) console.warn('[TruePrivacy] TRUEPRIVACY_IDENTITY_SECRET is not set: identity tokens will not be issued');
+
+// Token = HMAC-SHA256(secret, value passed to identify()), trimmed + lowercased.
+function identityToken(value) {
+  if (!TP_IDENTITY_SECRET) return null;
+  return crypto.createHmac('sha256', TP_IDENTITY_SECRET)
+    .update(String(value).trim().toLowerCase())
+    .digest('hex');
+}
+
+// Stable internal user id derived from the email (same email -> same id).
+// Must NOT look like an email.
+function makeUserId(email) {
+  let h = 2166136261;
+  const str = email.trim().toLowerCase();
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return 'usr_' + (h >>> 0).toString(36);
+}
+
 // Verify the webhook signature. Header format (from your logs):
 //   x-trueprivacy-signature-v2: t=<timestamp>,v1=<hex>
 // Assumed scheme: HMAC-SHA256(secret, `${t}.${rawBody}`). Falls back to the
@@ -118,7 +141,7 @@ app.post('/webhooks/trueprivacy', express.raw({ type: '*/*' }), async (req, res)
 
 console.log('Serving from:', path.join(__dirname, 'public'));
 app.use(express.json());
-app.use(cookieParser());
+app.use(cookieParser(COOKIE_SECRET));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ─── In-Memory Database ───────────────────────────────────────────────
@@ -429,6 +452,49 @@ app.use((req, res, next) => {
   // Simple auth: use cookie or default to user1
   req.userId = req.cookies.user_id || 'user1';
   next();
+});
+
+// ─── AUTH + TRUEPRIVACY IDENTITY TOKEN ───────────────────────────────
+// Demo login: any valid email + 6+ char password. The server remembers the
+// email in a signed, httpOnly cookie, so the token is only ever issued for the
+// email of the signed-in session (never for an email sent by the client later).
+const AUTH_COOKIE = 'ps_auth';
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function sessionPayload(email) {
+  const id = makeUserId(email);
+  return {
+    email,
+    id,
+    identityToken: identityToken(email),      // pass to identify(email, 'email', {identityToken})
+    userIdToken: identityToken(id)            // optional: for identify(id, <type>, {identityToken})
+  };
+}
+
+app.post('/api/login', (req, res) => {
+  const email = String((req.body && req.body.email) || '').trim().toLowerCase(); // same value is signed and passed to identify()
+  const password = String((req.body && req.body.password) || '');
+  if (!EMAIL_RE.test(email)) return res.status(400).json({ error: 'Enter a valid email address.', field: 'email' });
+  if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.', field: 'password' });
+
+  res.cookie(AUTH_COOKIE, email, {
+    signed: true, httpOnly: true, sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 7 * 24 * 60 * 60 * 1000
+  });
+  res.json(sessionPayload(email));
+});
+
+app.get('/api/me', (req, res) => {
+  const email = req.signedCookies && req.signedCookies[AUTH_COOKIE];
+  if (!email) return res.status(401).json({ error: 'Not signed in' });
+  res.set('Cache-Control', 'no-store');   // never cache a per-user token
+  res.json(sessionPayload(email));
+});
+
+app.post('/api/logout', (req, res) => {
+  res.clearCookie(AUTH_COOKIE);
+  res.json({ success: true });
 });
 
 // ─── PRODUCTS ────────────────────────────────────────────────────────
