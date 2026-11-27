@@ -1,3 +1,4 @@
+console.log('TP secret present:', !!process.env.TRUEPRIVACY_IDENTITY_SECRET, '| env keys:', Object.keys(process.env).filter(k => k.includes('TRUEPRIVACY')));
 const express = require('express');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
