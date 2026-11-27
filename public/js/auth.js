@@ -144,13 +144,12 @@ const Auth = {
 
   // ─── TRUEPRIVACY ──────────────────────────────────────────────
   // Official queue API. identify() is safe to call on every page; TruePrivacy
-  // sends it only once per user. We send a stable user id (-> "User ID" field)
-  // and the email (-> email identifier).
+  // sends it only once per user. We send only the email (with the server identity token).
   identify(user) {
     window.TruePrivacyQueue.push((trueprivacy) => {
-      console.log('[PulseSport] TruePrivacy identify:', user.id, user.email);
-      trueprivacy.identify(user.id);              // shows in the "User ID" field
-      // Email link needs the server-issued identity token (HMAC of this exact email).
+      console.log('[PulseSport] TruePrivacy identify:', user.email);
+      // Email is the only identifier, so consent records show the email.
+      // The server-issued identityToken proves this email belongs to the signed-in session.
       const opts = user.identityToken ? { identityToken: user.identityToken } : undefined;
       if (opts) trueprivacy.identify(user.email, 'email', opts);
       else trueprivacy.identify(user.email, 'email');
